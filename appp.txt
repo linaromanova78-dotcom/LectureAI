@@ -1,0 +1,573 @@
+import os
+import json
+import tempfile
+import urllib.request
+from pathlib import Path
+
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+
+import streamlit as st
+from faster_whisper import WhisperModel
+
+st.set_page_config(
+    page_title="LectureAI",
+    page_icon="🎓"
+)
+
+st.title("🎓 LectureAI")
+
+st.markdown(
+    "### Умный помощник для студентов"
+)
+
+st.markdown(
+    "🎙️ **Запишите или загрузите лекцию** — "
+    "LectureAI расшифрует её, создаст конспект, "
+    "составит тест и объяснит сложные темы простыми словами."
+)
+
+st.divider()
+
+@st.cache_resource
+def load_whisper():
+    return WhisperModel(
+        "base",
+        device="cpu",
+        compute_type="int8"
+    )
+
+def ask_qwen(text):
+    prompt = f"""
+Ты — умный помощник студента.
+
+На основе расшифровки лекции составь понятный учебный конспект.
+
+Используй только информацию из расшифровки.
+Не придумывай факты.
+
+Структура:
+
+📌 ТЕМА ЛЕКЦИИ
+
+📝 КРАТКОЕ СОДЕРЖАНИЕ
+
+🔑 КЛЮЧЕВЫЕ ПОНЯТИЯ
+- термин — простое объяснение
+
+📚 ОСНОВНЫЕ ТЕЗИСЫ
+- главная мысль
+- главная мысль
+- главная мысль
+
+💡 ВАЖНЫЕ ФАКТЫ И ПРИМЕРЫ
+
+🎯 ЧТО НУЖНО ЗАПОМНИТЬ
+
+⚡ ПОВТОРЕНИЕ ЗА 1 МИНУТУ
+
+Пиши на русском языке.
+
+РАСШИФРОВКА:
+{text}
+"""
+
+    data = json.dumps({
+        "model": "qwen2.5:3b",
+        "prompt": prompt,
+        "stream": False
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        "http://localhost:11434/api/generate",
+        data=data,
+        headers={"Content-Type": "application/json"}
+    )
+
+    with urllib.request.urlopen(request, timeout=600) as response:
+        result = json.loads(
+            response.read().decode("utf-8")
+        )
+
+    return result["response"]
+
+def create_pdf(text, filename="lecture_notes.pdf"):
+
+    pdfmetrics.registerFont(
+        TTFont(
+            "Arial",
+            "C:/Windows/Fonts/arial.ttf"
+        )
+    )
+    styles = getSampleStyleSheet()
+
+    styles["Normal"].fontName = "Arial"
+    styles["Normal"].fontSize = 10
+    styles["Normal"].leading = 14
+
+    styles["Title"].fontName = "Arial"
+
+    document = SimpleDocTemplate(
+        filename,
+        pagesize=A4,
+        rightMargin=40,
+        leftMargin=40,
+        topMargin=40,
+        bottomMargin=40
+    )
+
+    elements = []
+
+    elements.append(
+        Paragraph(
+            "🎓 LectureAI — конспект лекции",
+            styles["Title"]
+        )
+    )
+
+    elements.append(
+        Spacer(1, 20)
+    )
+
+    for line in text.split("\n"):
+
+        line = line.strip()
+
+        if line:
+
+            line = line.replace(
+                "&",
+                "&amp;"
+            )
+
+            elements.append(
+                Paragraph(
+                    line,
+                    styles["Normal"]
+                )
+            )
+
+            elements.append(
+                Spacer(1, 8)
+            )
+
+    document.build(elements)
+
+    return filename
+
+def explain_simple(text):
+
+    prompt = f"""
+Ты — помощник студента.
+
+Объясни содержание лекции максимально простым и понятным языком.
+
+Представь, что студент только начинает изучать эту тему.
+
+Правила:
+- используй только информацию из текста лекции;
+- не придумывай факты;
+- сложные термины объясняй простыми словами;
+- используй короткие примеры, если они есть в лекции;
+- выдели главное;
+- не перегружай объяснение лишней информацией.
+
+Структура:
+
+💡 ПРОСТОЕ ОБЪЯСНЕНИЕ
+
+🔑 ГЛАВНОЕ
+
+📌 ПРИМЕР
+
+🎯 ЧТО ЗАПОМНИТЬ
+
+ТЕКСТ ЛЕКЦИИ:
+{text}
+"""
+
+    data = json.dumps({
+        "model": "qwen2.5:3b",
+        "prompt": prompt,
+        "stream": False
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        "http://localhost:11434/api/generate",
+        data=data,
+        headers={
+            "Content-Type": "application/json"
+        }
+    )
+
+    with urllib.request.urlopen(request, timeout=600) as response:
+        result = json.loads(
+            response.read().decode("utf-8")
+        )
+
+    return result["response"]
+
+def create_test(text):
+    prompt = f"""
+Ты создаёшь тест для студента по лекции.
+
+Создай ровно 5 вопросов.
+
+Для каждого вопроса используй строго такой формат:
+
+ВОПРОС 1: текст вопроса
+A) вариант ответа
+B) вариант ответа
+C) вариант ответа
+D) вариант ответа
+ПРАВИЛЬНЫЙ: A
+
+ВОПРОС 2: текст вопроса
+A) вариант ответа
+B) вариант ответа
+C) вариант ответа
+D) вариант ответа
+ПРАВИЛЬНЫЙ: B
+
+И так далее до вопроса 5.
+
+Используй только информацию из лекции.
+Не придумывай факты.
+
+ЛЕКЦИЯ:
+{text}
+"""
+
+    data = json.dumps({
+        "model": "qwen2.5:3b",
+        "prompt": prompt,
+        "stream": False
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        "http://localhost:11434/api/generate",
+        data=data,
+        headers={
+            "Content-Type": "application/json"
+        }
+    )
+
+    with urllib.request.urlopen(request, timeout=600) as response:
+        result = json.loads(
+            response.read().decode("utf-8")
+        )
+
+    return result["response"]
+
+st.markdown("## 🎙️ Загрузка лекции")
+
+st.caption(
+    "Поддерживаются форматы MP3, WAV, M4A и OGG"
+)
+
+uploaded_file = st.file_uploader(
+    "Выберите аудиофайл",
+    type=["mp3", "wav", "m4a", "ogg"],
+    label_visibility="collapsed"
+)
+
+if uploaded_file is not None:
+
+    st.success(f"Файл загружен: {uploaded_file.name}")
+
+    st.audio(
+        uploaded_file,
+        format=uploaded_file.type
+    )
+
+    if st.button(
+    "🚀 Расшифровать лекцию",
+    use_container_width=True
+):
+
+        temp_path = None
+
+        try:
+
+            with st.spinner("🎧 Распознаю речь..."):
+
+                suffix = Path(
+                    uploaded_file.name
+                ).suffix
+
+                with tempfile.NamedTemporaryFile(
+                    delete=False,
+                    suffix=suffix
+                ) as temp_file:
+
+                    temp_file.write(
+                        uploaded_file.getbuffer()
+                    )
+
+                    temp_path = temp_file.name
+
+                model = load_whisper()
+
+                segments, info = model.transcribe(
+                    temp_path,
+                    language="ru",
+                    beam_size=5
+                )
+
+                text = " ".join(
+                    segment.text.strip()
+                    for segment in segments
+                )
+
+            st.session_state["lecture_text"] = text
+
+            st.success("✅ Лекция расшифрована!")
+
+        except Exception as error:
+
+            st.error(f"❌ Ошибка распознавания: {error}")
+
+        finally:
+
+            if temp_path is not None:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+
+if "lecture_text" in st.session_state:
+
+    text = st.session_state["lecture_text"]
+
+    st.subheader("📝 Расшифровка")
+
+    st.text_area(
+        "Текст лекции:",
+        text,
+        height=400
+    )
+
+    if st.button("🤖 Создать умный конспект"):
+
+        try:
+
+            with st.spinner("🤖 Qwen анализирует лекцию..."):
+
+                summary = ask_qwen(text)
+
+            st.session_state["summary"] = summary
+
+            st.success("🎉 Конспект готов!")
+
+        except Exception as error:
+
+            st.error(f"❌ Ошибка Qwen: {error}")
+
+if "summary" in st.session_state:
+
+    st.subheader("📚 Умный конспект")
+
+    st.markdown(
+        st.session_state["summary"]
+    )
+
+if "lecture_text" in st.session_state:
+
+    if st.button("💡 Объяснить проще"):
+
+        try:
+
+            with st.spinner("💡 Объясняю простыми словами..."):
+
+                simple_explanation = explain_simple(
+                    st.session_state["lecture_text"]
+                )
+
+            st.session_state["simple_explanation"] = simple_explanation
+
+            st.success("✨ Готово!")
+
+        except Exception as error:
+
+            st.error(
+                f"❌ Ошибка объяснения: {error}"
+            )
+
+if "simple_explanation" in st.session_state:
+
+    st.subheader("💡 Объяснение простыми словами")
+
+    st.markdown(
+        st.session_state["simple_explanation"]
+    )
+
+if "lecture_text" in st.session_state:
+
+    if st.button("📝 Создать тест"):
+
+        try:
+
+            with st.spinner("🧠 Создаю тест по лекции..."):
+
+                test = create_test(
+                    st.session_state["lecture_text"]
+                )
+
+            st.session_state["test"] = test
+
+            st.success("🎯 Тест готов!")
+
+        except Exception as error:
+
+            st.error(
+                f"❌ Ошибка при создании теста: {error}"
+            )
+
+def create_test(text):
+    prompt = f"""
+Ты создаёшь тест для студента по лекции.
+
+Создай ровно 5 вопросов.
+
+Для каждого вопроса используй строго такой формат:
+
+ВОПРОС 1: текст вопроса
+A) вариант ответа
+B) вариант ответа
+C) вариант ответа
+D) вариант ответа
+ПРАВИЛЬНЫЙ: A
+
+ВОПРОС 2: текст вопроса
+A) вариант ответа
+B) вариант ответа
+C) вариант ответа
+D) вариант ответа
+ПРАВИЛЬНЫЙ: B
+
+И так далее до вопроса 5.
+
+Используй только информацию из лекции.
+Не придумывай факты.
+
+ЛЕКЦИЯ:
+{text}
+"""
+
+    data = json.dumps({
+        "model": "qwen2.5:3b",
+        "prompt": prompt,
+        "stream": False
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        "http://localhost:11434/api/generate",
+        data=data,
+        headers={
+            "Content-Type": "application/json"
+        }
+    )
+
+    with urllib.request.urlopen(request, timeout=600) as response:
+        result = json.loads(
+            response.read().decode("utf-8")
+        )
+
+    return result["response"]
+if "test" in st.session_state:
+
+    st.subheader("📝 Тест по лекции")
+
+    test_text = st.session_state["test"]
+
+    questions = []
+    blocks = test_text.split("ВОПРОС ")
+
+    for block in blocks[1:]:
+
+        lines = block.strip().split("\n")
+
+        question_text = ""
+        options = {}
+        correct = ""
+
+        for line in lines:
+
+            line = line.strip()
+
+            if line.startswith(("1:", "2:", "3:", "4:", "5:")):
+                question_text = line
+
+            elif line.startswith("A)"):
+                options["A"] = line[2:].strip()
+
+            elif line.startswith("B)"):
+                options["B"] = line[2:].strip()
+
+            elif line.startswith("C)"):
+                options["C"] = line[2:].strip()
+
+            elif line.startswith("D)"):
+                options["D"] = line[2:].strip()
+
+            elif line.startswith("ПРАВИЛЬНЫЙ:"):
+                correct = line.split(":")[-1].strip()
+
+        if question_text and len(options) == 4 and correct:
+            questions.append({
+                "question": question_text,
+                "options": options,
+                "correct": correct
+            })
+
+    answers = {}
+
+    for i, q in enumerate(questions):
+
+        st.markdown(f"### {i + 1}. {q['question']}")
+
+        answers[i] = st.radio(
+            "Выберите ответ:",
+            list(q["options"].keys()),
+            format_func=lambda x, opts=q["options"]: f"{x}) {opts[x]}",
+            key=f"question_{i}"
+        )
+
+    if st.button("✅ Проверить тест"):
+
+        score = 0
+
+        for i, q in enumerate(questions):
+
+            if answers[i] == q["correct"]:
+                score += 1
+
+        st.success(
+            f"🎉 Результат: {score} из {len(questions)}"
+        )
+
+if "summary" in st.session_state:
+
+    if st.button("📄 Создать PDF конспекта"):
+
+        try:
+
+            pdf_file = create_pdf(
+                st.session_state["summary"]
+            )
+
+            with open(pdf_file, "rb") as file:
+
+                st.download_button(
+                    "📥 Скачать PDF",
+                    file,
+                    file_name="LectureAI_Конспект.pdf",
+                    mime="application/pdf"
+                )
+
+        except Exception as error:
+
+            st.error(
+                f"❌ Ошибка создания PDF: {error}"
+            )
